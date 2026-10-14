@@ -9,8 +9,8 @@
 ## 1. Clone and import
 
 ```bash
-git clone YOUR_REPOSITORY_URL
-cd n8n-gtm-lead-enrichment
+git clone https://github.com/imnottaken/gtm-lead-enrichment.git
+cd gtm-lead-enrichment
 ```
 
 In n8n, choose **Import from File** and select `workflows/gtm-lead-sourcing-and-crm-enrichment.json`.

@@ -4,6 +4,10 @@
   "description": "Enterprise n8n automation for GTM lead sourcing, deduplication, Clay enrichment, and Zoho CRM routing.",
   "author": "Koustav Dey <koustavdey75@gmail.com>",
   "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/imnottaken/gtm-lead-enrichment.git"
+  },
   "type": "module",
   "scripts": {
     "validate": "node scripts/validate-workflow.js",
