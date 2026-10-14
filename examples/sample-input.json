@@ -1,0 +1,9 @@
+{
+  "location": "Austin, Texas",
+  "business type": "industrial equipment distributor",
+  "keywords": "fleet maintenance",
+  "rep name": "Example Rep",
+  "number of leads required": 2,
+  "apify_actor_id": "compass/crawler-google-places"
+}
+

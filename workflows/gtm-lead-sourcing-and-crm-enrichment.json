@@ -1,0 +1,1989 @@
+{
+  "name": "GTM Lead Sourcing and CRM Enrichment",
+  "nodes": [
+    {
+      "parameters": {},
+      "name": "Click to Source Enquiry Leads",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [
+        192,
+        368
+      ]
+    },
+    {
+      "parameters": {
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "cachedResultName": "GTM Lead Workbook"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "list",
+          "value": "gid=0",
+          "cachedResultName": "GTM Lead Workbook"
+        },
+        "options": {
+          "dataLocationOnSheet": {
+            "values": {
+              "rangeDefinition": "specifyRange"
+            }
+          },
+          "outputFormatting": {
+            "values": {
+              "general": "UNFORMATTED_VALUE",
+              "date": "FORMATTED_STRING"
+            }
+          },
+          "returnFirstMatch": true
+        }
+      },
+      "name": "Read Enquiry Row",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        400,
+        368
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "name": "location",
+              "value": "={{ (() => { const m = Object.fromEntries(Object.entries($json).map(([k,v]) => [k.trim().toLowerCase(), v])); return (m.location ?? m.city ?? '').toString().trim(); })() }}",
+              "type": "string"
+            },
+            {
+              "name": "businessType",
+              "value": "={{ (() => { const m = Object.fromEntries(Object.entries($json).map(([k,v]) => [k.trim().toLowerCase(), v])); return (m['business type'] ?? m.businesstype ?? m.industry ?? '').toString().trim(); })() }}",
+              "type": "string"
+            },
+            {
+              "name": "keywords",
+              "value": "={{ (() => { const m = Object.fromEntries(Object.entries($json).map(([k,v]) => [k.trim().toLowerCase(), v])); return (m.keywords ?? m.keyword ?? '').toString().trim(); })() }}",
+              "type": "string"
+            },
+            {
+              "name": "repName",
+              "value": "={{ (() => { const m = Object.fromEntries(Object.entries($json).map(([k,v]) => [k.trim().toLowerCase(), v])); return (m['rep name'] ?? m.repname ?? m.rep ?? '').toString().trim(); })() }}",
+              "type": "string"
+            },
+            {
+              "name": "numberOfLeads",
+              "value": "={{ (() => { const m = Object.fromEntries(Object.entries($json).map(([k,v]) => [k.trim().toLowerCase(), v])); const n = Number(m['number of leads required'] ?? m.numberofleads ?? m.leads ?? 2); return Math.max(1, Math.min(n || 2, 25)); })() }}",
+              "type": "number"
+            },
+            {
+              "name": "apifyActorId",
+              "value": "={{ (() => { const m = Object.fromEntries(Object.entries($json).map(([k,v]) => [k.trim().toLowerCase(), v])); return (m.apify_actor_id ?? m.apifyactorid ?? m['apify actor'] ?? 'compass/crawler-google-places').toString().trim(); })() }}",
+              "type": "string"
+            },
+            {
+              "name": "queryString",
+              "value": "={{ (() => { const m = Object.fromEntries(Object.entries($json).map(([k,v]) => [k.trim().toLowerCase(), v])); const location = (m.location ?? m.city ?? '').toString().trim(); const businessType = (m['business type'] ?? m.businesstype ?? m.industry ?? '').toString().trim(); const keywords = (m.keywords ?? m.keyword ?? '').toString().trim(); return [keywords || businessType, keywords ? businessType : '', 'in', location].filter(Boolean).join(' '); })() }}",
+              "type": "string"
+            }
+          ]
+        },
+        "includeOtherFields": true,
+        "options": {}
+      },
+      "name": "Normalize Enquiry",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        624,
+        368
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "={{ 'https://api.apify.com/v2/acts/' + (($json.apifyActorId || 'compass/crawler-google-places').replace('/', '~')) + '/run-sync-get-dataset-items' }}",
+        "authentication": "genericCredentialType",
+        "genericAuthType": "httpBearerAuth",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "Accept",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ { searchStringsArray: [$json.queryString], locationQuery: $json.location, maxCrawledPlacesPerSearch: $json.numberOfLeads || 2, maxItems: $json.numberOfLeads || 2, language: 'en', scrapePlaceDetailPage: true, scrapeEmails: true, scrapeContacts: true, includeWebResults: true } }}",
+        "options": {
+          "batching": {
+            "batch": {
+              "batchSize": 1
+            }
+          }
+        }
+      },
+      "name": "Search Business Directory API",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.4,
+      "position": [
+        1040,
+        160
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000
+    },
+    {
+      "parameters": {
+        "jsCode": "const enquiry = ($items('Normalize Enquiry')[0] || {}).json || {};\nconst payloads = $input.all().map(item => item.json);\nconst records = [];\nfunction collect(value) {\n  if (!value) return;\n  if (Array.isArray(value)) {\n    value.forEach(collect);\n    return;\n  }\n  const candidateArrays = [value.results, value.data, value.items, value.companies, value.businesses, value.places, value.organic_results];\n  const nested = candidateArrays.find(Array.isArray);\n  if (nested) {\n    nested.forEach(collect);\n    return;\n  }\n  records.push(value);\n}\npayloads.forEach(collect);\nfunction firstValue(raw, keys) {\n  for (const key of keys) {\n    const value = raw[key];\n    if (Array.isArray(value) && value.length) {\n      const first = value[0];\n      if (typeof first === 'object' && first) return first.email || first.phone || first.value || first.url || first.name || '';\n      return first;\n    }\n    if (value !== undefined && value !== null && typeof value !== 'object' && String(value).trim()) return value;\n  }\n  return '';\n}\nfunction firstArray(raw, keys) {\n  for (const key of keys) {\n    const value = raw[key];\n    if (Array.isArray(value) && value.length) return value.map(v => typeof v === 'object' && v ? (v.name || v.title || v.category || JSON.stringify(v)) : String(v)).join(', ');\n  }\n  return '';\n}\nfunction cleanWebsite(value) {\n  const input = String(value || '').trim();\n  if (!input) return '';\n  const withProtocol = /^https?:\\/\\//i.test(input) ? input : 'https://' + input;\n  try {\n    const url = new URL(withProtocol);\n    return url.origin.replace(/\\/$/, '');\n  } catch (error) {\n    return input;\n  }\n}\nfunction domainFromWebsite(value) {\n  try {\n    return new URL(cleanWebsite(value)).hostname.replace(/^www\\./i, '').toLowerCase();\n  } catch (error) {\n    return '';\n  }\n}\nfunction isBadDomain(value) {\n  const host = domainFromWebsite(value);\n  if (!host) return true;\n  return ['google.com', 'gstatic.com', 'googleusercontent.com', 'justdial.com', 'practo.com', 'instagram.com', 'facebook.com', 'youtube.com', 'wikipedia.org', 'bookimed.com'].some(bad => host === bad || host.endsWith('.' + bad));\n}\nfunction websiteFromRaw(raw) {\n  const direct = firstValue(raw, ['website', 'site']);\n  if (direct && !isBadDomain(direct)) return direct;\n  const rawDomain = firstValue(raw, ['domain']);\n  if (rawDomain && !isBadDomain(rawDomain)) return rawDomain;\n  const webResults = Array.isArray(raw.webResults) ? raw.webResults : [];\n  const ownedResult = webResults.find(result => result && result.url && !isBadDomain(result.url));\n  return ownedResult ? ownedResult.url : '';\n}\nfunction cleanEmail(value) {\n  const match = String(value || '').toLowerCase().match(/[a-z0-9._%+-]+@[a-z0-9.-]+\\.[a-z]{2,}/i);\n  return match ? match[0] : '';\n}\nfunction cleanPhone(value) {\n  return String(value || '').replace(/[^+0-9]/g, '').trim();\n}\nfunction phoneKey(value) {\n  return String(value || '').replace(/[^0-9]/g, '');\n}\nfunction hasUsablePhone(value) {\n  return phoneKey(value).length >= 7;\n}\nfunction compactKey(value) {\n  return String(value || '').toLowerCase().replace(/[^a-z0-9]+/g, '-').replace(/^-|-$/g, '');\n}\nfunction locationText(raw) {\n  const text = firstValue(raw, ['address', 'formattedAddress', 'formatted_address', 'neighborhood', 'city', 'street']);\n  if (text) return String(text).trim();\n  if (raw.location && typeof raw.location === 'object' && raw.location.lat && raw.location.lng) return `${raw.location.lat},${raw.location.lng}`;\n  return enquiry.location || '';\n}\nconst seen = new Set();\nconst output = [];\nfor (const raw of records) {\n  const companyName = String(firstValue(raw, ['companyName', 'company_name', 'businessName', 'business_name', 'name', 'title', 'company'])).trim();\n  const website = cleanWebsite(websiteFromRaw(raw));\n  const email = cleanEmail(firstValue(raw, ['email', 'emails', 'contactEmail', 'contact_email']));\n  const phone = cleanPhone(firstValue(raw, ['phone', 'phones', 'phoneUnformatted', 'telephone', 'mobile', 'mobilePhone', 'mobile_phone']));\n  const hasContact = Boolean(email || hasUsablePhone(phone));\n  if (!hasContact) continue;\n  const location = locationText(raw);\n  const sourceUrl = String(firstValue(raw, ['sourceUrl', 'source_url', 'mapsUrl', 'googleUrl', 'url'])).trim() || website;\n  if (!companyName) continue;\n  const domain = domainFromWebsite(website);\n  const uniqueKey = (domain || email || phoneKey(phone) || compactKey(companyName + '-' + location)).toLowerCase();\n  if (!uniqueKey || seen.has(uniqueKey)) continue;\n  seen.add(uniqueKey);\n  const rawCategoryName = String(firstValue(raw, ['categoryName', 'category', 'primaryCategory', 'type', 'industry'])).trim();\n  const rawCategories = firstArray(raw, ['categories', 'types', 'categoryNames']);\n  const reviewsCount = Number(firstValue(raw, ['reviewsCount', 'reviewCount', 'reviews', 'userRatingsTotal']) || 0);\n  const searchable = [companyName, raw.description, rawCategoryName, rawCategories, raw.industry, location].join(' ').toLowerCase();\n  let score = 0;\n  if (companyName) score += 25;\n  if (website && domain) score += 20;\n  if (email) score += 25;\n  if (hasUsablePhone(phone)) score += 10;\n  if (location) score += 10;\n  if (enquiry.businessType && searchable.includes(String(enquiry.businessType).toLowerCase())) score += 5;\n  if (enquiry.keywords && String(enquiry.keywords).toLowerCase().split(/[, ]+/).some(word => word && searchable.includes(word))) score += 5;\n  score = Math.min(score, 100);\n  const reviewReasons = [];\n  if (!website) reviewReasons.push('missing website');\n  output.push({\n    json: {\n      uniqueKey,\n      companyName,\n      website,\n      domain,\n      email,\n      phone,\n      location,\n      businessType: enquiry.businessType || '',\n      keywords: enquiry.keywords || '',\n      repName: enquiry.repName || '',\n      apifyActorId: enquiry.apifyActorId || '',\n      queryString: enquiry.queryString || '',\n      sourceUrl,\n      rawCategoryName,\n      rawCategories,\n      reviewsCount,\n      dataQualityScore: score,\n      confidenceBand: score >= 85 ? 'high' : score >= 70 ? 'medium' : 'low',\n      crmReady: Boolean(companyName && hasContact),\n      duplicateFound: false,\n      duplicateLeadId: '',\n      reviewReason: reviewReasons.join('; ') || 'ready for CRM: email or phone found',\n      normalizedAt: new Date().toISOString()\n    }\n  });\n}\nif (!output.length) {\n  return [{ json: { recordType: 'run_issue', uniqueKey: `no-contactable-${enquiry.row_number || 'row'}-${Date.now()}`, companyName: '', website: '', email: '', phone: '', location: enquiry.location || '', businessType: enquiry.businessType || '', keywords: enquiry.keywords || '', repName: enquiry.repName || '', crmReady: false, duplicateFound: false, duplicateLeadId: '', reviewReason: 'No contactable leads found: Apify results had neither a valid email nor a usable phone', normalizedAt: new Date().toISOString() } }];\n}\nreturn output;"
+      },
+      "name": "Extract Normalize Score Leads",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1200,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "name": "status",
+              "value": "completed",
+              "type": "string"
+            },
+            {
+              "name": "completedAt",
+              "value": "={{ $now.toISO() }}",
+              "type": "string"
+            },
+            {
+              "name": "message",
+              "value": "GTM run completed. Invalid and zero-result enquiries are recorded in Review; Clay enrichment resumes by callback or times out to company fallback; Zoho creates/updates are validated, deduped, and written to Output only after CRM success.",
+              "type": "string"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "name": "Run Summary",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        1856,
+        -96
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "cachedResultName": "GTM Lead Workbook"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Output"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "matchingColumns": [
+            "uniqueKey"
+          ],
+          "value": {
+            "uniqueKey": "={{ $json.uniqueKey }}",
+            "companyName": "={{ $json.companyName }}",
+            "website": "={{ $json.website }}",
+            "email": "={{ $json.email }}",
+            "phone": "={{ $json.phone }}",
+            "location": "={{ $json.location }}",
+            "businessType": "={{ $json.businessType }}",
+            "keywords": "={{ $json.keywords }}",
+            "dataQualityScore": "={{ $json.dataQualityScore }}",
+            "confidenceBand": "={{ $json.confidenceBand }}",
+            "sourceUrl": "={{ $json.sourceUrl }}",
+            "crmReady": "={{ $json.crmReady }}",
+            "normalizedAt": "={{ $now.toISO() }}",
+            "repName": "={{ $json.repName }}",
+            "duplicateFound": "={{ $json.duplicateFound }}",
+            "duplicateLeadId": "={{ $json.duplicateLeadId }}",
+            "orgSizeSegment": "={{ $json.orgSizeSegment }}",
+            "orgStructureScore": "={{ $json.orgStructureScore }}",
+            "enrichmentRoleTarget": "={{ $json.enrichmentRoleTarget }}",
+            "enrichmentStatus": "={{ $json.enrichmentStatus }}",
+            "contactFullName": "={{ $json.contactFullName }}",
+            "contactFirstName": "={{ $json.contactFirstName }}",
+            "contactLastName": "={{ $json.contactLastName }}",
+            "contactTitle": "={{ $json.contactTitle }}",
+            "contactEmail": "={{ $json.contactEmail }}",
+            "contactPhone": "={{ $json.contactPhone }}",
+            "contactSource": "={{ $json.contactSource }}",
+            "parentCompanyName": "={{ $json.parentCompanyName }}",
+            "zohoLeadMode": "={{ $json.zohoLeadMode }}",
+            "reviewReason": "={{ $json.reviewReason }}",
+            "crmAssignmentNote": "={{ $json.crmAssignmentNote }}"
+          },
+          "schema": [
+            {
+              "displayName": "uniqueKey",
+              "required": true,
+              "defaultMatch": true,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "displayName": "companyName",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "website",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "displayName": "email",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "displayName": "phone",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "displayName": "location",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "businessType",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "keywords",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "repName",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "orgSizeSegment",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "orgStructureScore",
+              "required": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "enrichmentRoleTarget",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "enrichmentStatus",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "contactFullName",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "contactFirstName",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "contactLastName",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "contactTitle",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "contactEmail",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "contactPhone",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "contactSource",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "parentCompanyName",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "zohoLeadMode",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "dataQualityScore",
+              "required": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "confidenceBand",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "duplicateFound",
+              "required": false,
+              "display": true,
+              "type": "boolean",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "duplicateLeadId",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "reviewReason",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "crmAssignmentNote",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "sourceUrl",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "crmReady",
+              "required": false,
+              "display": true,
+              "type": "boolean",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "normalizedAt",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            }
+          ]
+        },
+        "options": {
+          "cellFormat": "USER_ENTERED",
+          "locationDefine": {
+            "values": {}
+          }
+        }
+      },
+      "name": "Write Qualified Output",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        3984,
+        272
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "lead",
+        "Company": "={{ $json.crmCompany }}",
+        "lastName": "={{ $json.crmLastName }}",
+        "additionalFields": {
+          "Address": {
+            "address_fields": {
+              "City": "={{ $json.crmCity }}"
+            }
+          },
+          "Description": "={{ 'Lead mode: ' + ($json.zohoLeadMode || 'company_lead') + '\\nParent company: ' + ($json.parentCompanyName || $json.companyName || '') + '\\nBusiness type: ' + ($json.businessType || '') + '\\nRep: ' + ($json.repName || 'Unassigned') + '\\nOwner status: ' + ($json.ownerResolutionStatus || '') + '\\nSource URL: ' + ($json.sourceUrl || '') }}",
+          "Designation": "={{ $json.crmTitle }}",
+          "Email": "={{ $json.crmEmail }}",
+          "First_Name": "={{ $json.contactFirstName || '' }}",
+          "Industry": "={{ $('Cross Verify CRM Duplicate').item.json.businessType }}",
+          "Lead_Source": "n8n Lead Location Sheet + Clay Enrichment",
+          "Lead_Status": "New",
+          "Phone": "={{ $json.crmPhone }}",
+          "Website": "={{ $json.crmWebsite }}"
+        }
+      },
+      "name": "Create Zoho Lead",
+      "type": "n8n-nodes-base.zohoCrm",
+      "typeVersion": 1,
+      "position": [
+        3280,
+        288
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "amount": 1
+      },
+      "name": "Throttle After Zoho Write",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        3920,
+        688
+      ]
+    },
+    {
+      "parameters": {
+        "options": {}
+      },
+      "name": "Loop Leads",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        1712,
+        368
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "cachedResultName": "GTM Lead Workbook"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Review"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "matchingColumns": [
+            "uniqueKey"
+          ],
+          "value": {
+            "uniqueKey": "={{ $json.uniqueKey }}",
+            "companyName": "={{ $json.companyName }}",
+            "website": "={{ $json.website }}",
+            "email": "={{ $json.email }}",
+            "phone": "={{ $json.phone }}",
+            "location": "={{ $json.location }}",
+            "businessType": "={{ $json.businessType }}",
+            "keywords": "={{ $json.keywords }}",
+            "dataQualityScore": "={{ $json.dataQualityScore }}",
+            "confidenceBand": "={{ $json.confidenceBand }}",
+            "reviewReason": "={{ $json.reviewReason }}",
+            "sourceUrl": "={{ $json.sourceUrl }}",
+            "normalizedAt": "={{ $now.toISO() }}",
+            "repName": "={{ $json.repName }}",
+            "duplicateFound": "={{ $json.duplicateFound }}",
+            "duplicateLeadId": "={{ $json.duplicateLeadId }}",
+            "crmAssignmentNote": "={{ $json.crmAssignmentNote }}",
+            "orgSizeSegment": "={{ $json.orgSizeSegment }}",
+            "orgStructureScore": "={{ $json.orgStructureScore }}",
+            "enrichmentRoleTarget": "={{ $json.enrichmentRoleTarget }}",
+            "enrichmentStatus": "={{ $json.enrichmentStatus }}",
+            "contactFullName": "={{ $json.contactFullName }}",
+            "contactFirstName": "={{ $json.contactFirstName }}",
+            "contactLastName": "={{ $json.contactLastName }}",
+            "contactTitle": "={{ $json.contactTitle }}",
+            "contactEmail": "={{ $json.contactEmail }}",
+            "contactPhone": "={{ $json.contactPhone }}",
+            "contactSource": "={{ $json.contactSource }}",
+            "parentCompanyName": "={{ $json.parentCompanyName }}",
+            "zohoLeadMode": "={{ $json.zohoLeadMode }}",
+            "crmReady": "={{ $json.crmReady }}"
+          },
+          "schema": [
+            {
+              "displayName": "uniqueKey",
+              "required": true,
+              "defaultMatch": true,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "displayName": "companyName",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "website",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "displayName": "email",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "displayName": "phone",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "displayName": "location",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "businessType",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "keywords",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "repName",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "orgSizeSegment",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "orgStructureScore",
+              "required": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "enrichmentRoleTarget",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "enrichmentStatus",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "contactFullName",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "contactFirstName",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "contactLastName",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "contactTitle",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "contactEmail",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "contactPhone",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "contactSource",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "parentCompanyName",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "zohoLeadMode",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "dataQualityScore",
+              "required": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "confidenceBand",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "duplicateFound",
+              "required": false,
+              "display": true,
+              "type": "boolean",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "duplicateLeadId",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "reviewReason",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "crmAssignmentNote",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "sourceUrl",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "crmReady",
+              "required": false,
+              "display": true,
+              "type": "boolean",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "normalizedAt",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            }
+          ]
+        },
+        "options": {
+          "cellFormat": "USER_ENTERED",
+          "locationDefine": {
+            "values": {}
+          }
+        }
+      },
+      "name": "Write Review Queue",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        3328,
+        464
+      ]
+    },
+    {
+      "parameters": {
+        "amount": 1
+      },
+      "name": "Throttle After Review Write",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        3536,
+        560
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Workflow Design\nTrigger: manual execution in n8n.\nInput: first enquiry row with location, business type, keywords, lead count, and optional rep note.\nSourcing: Apify Google Places search with retries and a contactability filter.\nEnrichment: company-size classification routes small organizations to owner lookup and larger organizations to HR/admin lookup. Clay resumes the execution through a callback URL; timeout falls back to company-level data.\nCRM: Zoho candidates are cross-checked before validated create, update, or review routing. Qualified output is written only after CRM success.",
+        "height": 200,
+        "width": 1140,
+        "color": 4
+      },
+      "name": "Workflow Overview",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        -176,
+        2016
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Data Model\nRequired query fields: location and businessType. Keywords, repName, and numberOfLeads are optional.\nContactability: either a valid email or a usable phone is required.\nIdentity: uniqueKey prefers domain, then email, phone, or normalized company plus location.\nSource of truth: Enquiry for intent, Apify and Clay for enrichment, Zoho for CRM state, and Output/Review sheets for operational audit.\nQuality controls: normalized website/email/phone, score 0-100, duplicate candidate matching, CRM field validation, and explicit review reasons.",
+        "height": 200,
+        "width": 860,
+        "color": 5
+      },
+      "name": "Data Model and Quality Controls",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1792,
+        2000
+      ]
+    },
+    {
+      "parameters": {
+        "content": "## Automation Logic\n1. Read and validate the first enquiry row.\n2. Source businesses through Apify with retry protection.\n3. Normalize, deduplicate, score, and drop records with neither email nor usable phone.\n4. Classify the enrichment target and queue it for Clay.\n5. Resume from the Clay callback or use the timeout fallback.\n6. Search all Zoho leads and classify the match as unique, ambiguous, or new.\n7. Validate field lengths and contact formats, then create, update, or send to Review.\n8. Write Output only after a successful Zoho response and continue the batch.",
+        "height": 480,
+        "width": 1700,
+        "color": 3
+      },
+      "name": "Processing and Failure Logic",
+      "type": "n8n-nodes-base.stickyNote",
+      "typeVersion": 1,
+      "position": [
+        1136,
+        -2048
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "lead",
+        "operation": "getAll",
+        "returnAll": true,
+        "options": {
+          "approved": true,
+          "converted": false,
+          "fields": [
+            "Email",
+            "Website",
+            "Phone",
+            "Mobile",
+            "Company",
+            "Last_Name",
+            "Full_Name",
+            "First_Name"
+          ]
+        }
+      },
+      "name": "Find Zoho Duplicate Candidates",
+      "type": "n8n-nodes-base.zohoCrm",
+      "typeVersion": 1,
+      "position": [
+        2528,
+        384
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "alwaysOutputData": true
+    },
+    {
+      "parameters": {
+        "jsCode": "const lead = $('Merge Enrichment Fields').item.json;\nconst candidates = $input.all().map(item => item.json || {}).filter(row => Object.keys(row).length && (row.id || row.ID || row.Lead_ID));\nfunction clean(value) { return String(value || '').trim().toLowerCase(); }\nfunction digits(value) { return String(value || '').replace(/[^0-9]/g, ''); }\nfunction domain(value) {\n  const input = String(value || '').trim();\n  if (!input) return '';\n  try { return new URL(/^https?:\\/\\//i.test(input) ? input : 'https://' + input).hostname.replace(/^www\\./i, '').toLowerCase(); }\n  catch (error) { return input.replace(/^https?:\\/\\//i, '').replace(/^www\\./i, '').split('/')[0].toLowerCase(); }\n}\nconst leadEmail = clean(lead.zohoEmail || lead.contactEmail || lead.email);\nconst leadDomain = domain(lead.website);\nconst leadPhone = digits(lead.zohoPhone || lead.contactPhone || lead.phone).slice(-10);\nconst leadCompany = clean(lead.parentCompanyName || lead.companyName);\nconst ranked = candidates.map(candidate => {\n  const emailMatch = Boolean(leadEmail && clean(candidate.Email) === leadEmail);\n  const phone = digits(candidate.Phone || candidate.Mobile).slice(-10);\n  const phoneMatch = Boolean(leadPhone && phone && phone === leadPhone);\n  const domainMatch = Boolean(leadDomain && domain(candidate.Website) === leadDomain);\n  const companyMatch = Boolean(leadCompany && clean(candidate.Company) === leadCompany);\n  const score = emailMatch ? 100 : phoneMatch ? 95 : domainMatch ? 80 : companyMatch ? 60 : 0;\n  return { candidate, score, matchReason: emailMatch ? 'email' : phoneMatch ? 'phone' : domainMatch ? 'domain' : companyMatch ? 'company' : '' };\n}).filter(match => match.score > 0).sort((a, b) => b.score - a.score);\nconst bestScore = ranked.length ? ranked[0].score : 0;\nconst bestMatches = ranked.filter(match => match.score === bestScore);\nconst ambiguous = bestMatches.length > 1;\nconst chosen = !ambiguous && bestMatches.length === 1 ? bestMatches[0] : null;\nconst duplicateLeadId = chosen ? (chosen.candidate.id || chosen.candidate.ID || chosen.candidate.Lead_ID || '') : '';\nreturn [{ json: { ...lead, duplicateFound: Boolean(chosen), duplicateLeadId, matchStatus: ambiguous ? 'ambiguous' : (chosen ? 'exact' : 'none'), matchReason: chosen ? chosen.matchReason : '', matchCandidateCount: bestMatches.length, reviewReason: ambiguous ? 'ambiguous Zoho match' : lead.reviewReason, crmAssignmentNote: lead.repName ? `Rep requested: ${lead.repName}; native Zoho owner not yet verified` : 'No rep name supplied' } }];"
+      },
+      "name": "Cross Verify CRM Duplicate",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2720,
+        384
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const lead = { ...$json };\nfunction digits(value) { return String(value || '').replace(/[^0-9]/g, ''); }\nfunction domainFromWebsite(value) {\n  const input = String(value || '').trim();\n  if (!input) return '';\n  try {\n    const url = new URL(/^https?:\\/\\//i.test(input) ? input : 'https://' + input);\n    return url.hostname.replace(/^www\\./i, '').toLowerCase();\n  } catch (error) {\n    return input.replace(/^https?:\\/\\//i, '').replace(/^www\\./i, '').split('/')[0].toLowerCase();\n  }\n}\nconst domain = lead.domain || domainFromWebsite(lead.website || lead.sourceUrl);\nconst text = [lead.companyName, lead.businessType, lead.keywords, lead.rawCategoryName, lead.rawCategories, lead.location, domain].join(' ').toLowerCase();\nlet score = 0;\nif (domain) score += 15;\nif (/\\b(group|corporation|corporate|private limited|pvt\\.? ltd|limited|ltd|llp|inc|enterprises|industries|technologies|solutions|international|national)\\b/.test(text)) score += 25;\nif (/\\b(hospital|medical college|university|institute|school|college|mall|resort|hotel|manufacturer|factory|dealer|distributor)\\b/.test(text)) score += 20;\nconst reviews = Number(lead.reviewsCount || lead.reviewCount || 0);\nif (reviews >= 500) score += 20;\nelse if (reviews >= 100) score += 10;\nif (/\\b(shop|store|retail|salon|bakery|restaurant|cafe|clinic|dental|studio|proprietor|services|showroom|local)\\b/.test(text)) score -= 10;\nscore = Math.max(0, Math.min(100, score));\nlet orgSizeSegment = 'small_org';\nif (score >= 50) orgSizeSegment = 'big_org';\nelse if (/\\b(shop|store|retail|salon|bakery|restaurant|cafe|studio|showroom)\\b/.test(text)) orgSizeSegment = 'small_retail';\nconst enrichmentRoleTarget = orgSizeSegment === 'big_org' ? 'hr_admin' : (orgSizeSegment === 'small_retail' ? 'owner_if_available' : 'owner');\nconst enrichmentSearchQuery = orgSizeSegment === 'big_org'\n  ? `Find HR manager, admin manager, or operations admin at ${lead.companyName}`\n  : `Find owner, founder, proprietor, or director at ${lead.companyName}`;\nconst hasCompanyContact = Boolean(lead.email || digits(lead.phone).length >= 7);\nconst hasPersonContact = Boolean(lead.contactFullName && (lead.contactEmail || digits(lead.contactPhone).length >= 7));\nreturn {\n  json: {\n    ...lead,\n    domain,\n    orgStructureScore: score,\n    orgSizeSegment,\n    enrichmentRoleTarget,\n    enrichmentSearchQuery,\n    enrichmentStatus: hasPersonContact ? 'contact_found' : 'queued_for_clay',\n    parentCompanyName: lead.parentCompanyName || lead.companyName,\n    zohoLeadMode: hasPersonContact ? 'person_lead' : 'company_lead',\n    contactFullName: lead.contactFullName || '',\n    contactFirstName: lead.contactFirstName || '',\n    contactLastName: lead.contactLastName || '',\n    contactTitle: lead.contactTitle || '',\n    contactEmail: lead.contactEmail || '',\n    contactPhone: lead.contactPhone || '',\n    contactSource: lead.contactSource || '',\n    crmReady: Boolean(lead.companyName && hasCompanyContact),\n    reviewReason: hasCompanyContact ? (lead.reviewReason || 'ready for CRM: company email or phone found') : 'missing email and phone'\n  }\n};"
+      },
+      "name": "Classify Enrichment Target",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1520,
+        368
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "cachedResultName": "GTM Lead Workbook"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Enrichment"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "matchingColumns": [
+            "uniqueKey"
+          ],
+          "value": {
+            "uniqueKey": "={{ $json.uniqueKey }}",
+            "companyName": "={{ $json.companyName }}",
+            "website": "={{ $json.website }}",
+            "domain": "={{ $json.domain }}",
+            "location": "={{ $json.location }}",
+            "businessType": "={{ $json.businessType }}",
+            "repName": "={{ $json.repName }}",
+            "orgSizeSegment": "={{ $json.orgSizeSegment }}",
+            "orgStructureScore": "={{ $json.orgStructureScore }}",
+            "enrichmentRoleTarget": "={{ $json.enrichmentRoleTarget }}",
+            "enrichmentSearchQuery": "={{ $json.enrichmentSearchQuery }}",
+            "enrichmentStatus": "waiting_for_clay_callback",
+            "parentCompanyName": "={{ $json.parentCompanyName }}",
+            "crmReady": "={{ $json.crmReady }}",
+            "duplicateFound": "={{ $json.duplicateFound }}",
+            "duplicateLeadId": "={{ $json.duplicateLeadId }}",
+            "sourceUrl": "={{ $json.sourceUrl }}",
+            "createdAt": "={{ $json.normalizedAt }}",
+            "updatedAt": "={{ $now.toISO() }}",
+            "clayCallbackUrl": "={{ $execution.resumeUrl }}",
+            "enrichmentRequestedAt": "={{ $now.toISO() }}",
+            "enrichmentCompletedAt": "",
+            "enrichmentAttempt": "={{ Number($json.enrichmentAttempt || 0) + 1 }}"
+          },
+          "schema": [
+            {
+              "displayName": "uniqueKey",
+              "required": true,
+              "defaultMatch": true,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "displayName": "companyName",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "website",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "domain",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "location",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "businessType",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "repName",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "orgSizeSegment",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "orgStructureScore",
+              "required": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "enrichmentRoleTarget",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "enrichmentSearchQuery",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "enrichmentStatus",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "parentCompanyName",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "crmReady",
+              "required": false,
+              "display": true,
+              "type": "boolean",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "duplicateFound",
+              "required": false,
+              "display": true,
+              "type": "boolean",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "duplicateLeadId",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "sourceUrl",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "createdAt",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "updatedAt",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "clayCallbackUrl",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "enrichmentRequestedAt",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "enrichmentCompletedAt",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "enrichmentAttempt",
+              "required": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": false
+            }
+          ]
+        },
+        "options": {
+          "cellFormat": "USER_ENTERED",
+          "locationDefine": {
+            "values": {}
+          }
+        }
+      },
+      "name": "Write Enrichment Queue",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        1904,
+        384
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const original = $('Classify Enrichment Target').item.json || {};\nconst callback = ($json && typeof $json === 'object' && $json.body && typeof $json.body === 'object') ? $json.body : ($json || {});\nfunction clean(value) { return String(value || '').trim(); }\nfunction digits(value) { return String(value || '').replace(/[^0-9]/g, ''); }\nfunction splitName(fullName) {\n  const parts = clean(fullName).split(/\\s+/).filter(Boolean);\n  if (!parts.length) return { first: '', last: '' };\n  if (parts.length === 1) return { first: '', last: parts[0] };\n  return { first: parts.slice(0, -1).join(' '), last: parts[parts.length - 1] };\n}\nconst fullName = clean(callback.contactFullName || original.contactFullName);\nconst split = splitName(fullName);\nconst contactEmail = clean(callback.contactEmail || original.contactEmail);\nconst contactPhone = clean(callback.contactPhone || original.contactPhone);\nconst hasPersonContact = Boolean(fullName && (contactEmail || digits(contactPhone).length >= 7));\nconst companyEmail = clean(original.email);\nconst companyPhone = clean(original.phone);\nconst hasAnyContact = Boolean(contactEmail || digits(contactPhone).length >= 7 || companyEmail || digits(companyPhone).length >= 7);\nconst callbackReceived = Boolean(callback.contactFullName || callback.contactEmail || callback.contactPhone || callback.enrichmentStatus);\nreturn { json: { ...original, ...callback, uniqueKey: original.uniqueKey, companyName: original.companyName, website: original.website || callback.website, domain: original.domain || callback.domain, email: companyEmail, phone: companyPhone, contactFullName: fullName, contactFirstName: clean(callback.contactFirstName || original.contactFirstName || split.first), contactLastName: clean(callback.contactLastName || original.contactLastName || split.last), contactTitle: clean(callback.contactTitle || original.contactTitle), contactEmail, contactPhone, contactSource: clean(callback.contactSource || original.contactSource || (hasPersonContact ? 'Clay callback' : '')), clayTaskId: clean(callback.clayTaskId || original.clayTaskId), clayEntityId: clean(callback.clayEntityId || original.clayEntityId), enrichmentStatus: hasPersonContact ? 'contact_found' : (callbackReceived ? 'completed_no_person' : 'clay_timeout'), enrichmentCompletedAt: callbackReceived ? new Date().toISOString() : '', parentCompanyName: clean(original.parentCompanyName || original.companyName), zohoLeadMode: hasPersonContact ? 'person_lead' : 'company_lead', zohoEmail: contactEmail || companyEmail, zohoPhone: contactPhone || companyPhone, crmReady: Boolean(original.companyName && hasAnyContact), reviewReason: hasAnyContact ? (hasPersonContact ? 'ready for CRM: enriched contact found' : 'contact person not found; using company as lead') : 'missing email and phone' } };"
+      },
+      "name": "Merge Enrichment Fields",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2336,
+        384
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.recordType || 'lead' }}",
+              "operator": {
+                "type": "string",
+                "operation": "notEquals"
+              },
+              "rightValue": "run_issue"
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "name": "Has Contactable Lead?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        1344,
+        368
+      ]
+    },
+    {
+      "parameters": {
+        "resume": "webhook",
+        "httpMethod": "POST",
+        "limitWaitTime": true,
+        "resumeAmount": 2,
+        "options": {
+          "onlyRunIf": "={{ !$json.body?.uniqueKey || $json.body.uniqueKey === $('Classify Enrichment Target').item.json.uniqueKey }}",
+          "responseData": "{\"accepted\":true}"
+        }
+      },
+      "name": "Wait for Clay Callback",
+      "type": "n8n-nodes-base.wait",
+      "typeVersion": 1.1,
+      "position": [
+        2128,
+        384
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const lead = { ...$json };\nfunction clean(value, max) { return String(value || '').trim().slice(0, max); }\nfunction digits(value) { return String(value || '').replace(/[^0-9]/g, ''); }\nconst email = clean(lead.zohoEmail || lead.contactEmail || lead.email, 100).toLowerCase();\nconst phone = clean(lead.zohoPhone || lead.contactPhone || lead.phone, 30);\nconst company = clean(lead.parentCompanyName || lead.companyName, 200);\nconst lastName = clean(lead.contactLastName || lead.contactFullName || company, 80);\nconst website = clean(lead.website, 255);\nconst city = clean(lead.location, 100);\nconst title = clean(lead.contactTitle || lead.enrichmentRoleTarget, 100);\nconst validEmail = !email || /^[^\\s@]+@[^\\s@]+\\.[^\\s@]+$/.test(email);\nconst validPhone = !phone || digits(phone).length >= 7;\nconst errors = [];\nif (!company) errors.push('missing company name');\nif (!lastName) errors.push('missing Zoho last name');\nif (!validEmail) errors.push('invalid email');\nif (!validPhone) errors.push('invalid phone');\nif (!email && digits(phone).length < 7) errors.push('missing email and usable phone');\nlet crmAction = 'review';\nif (!errors.length) {\n  if (lead.matchStatus === 'ambiguous') crmAction = 'review';\n  else if (lead.duplicateFound && lead.duplicateLeadId) crmAction = 'update';\n  else if (!lead.duplicateFound) crmAction = 'create';\n}\nreturn { json: { ...lead, crmCompany: company, crmLastName: lastName, crmEmail: email, crmPhone: phone, crmWebsite: website, crmCity: city, crmTitle: title, crmAction, crmValidationErrors: errors, crmReady: crmAction !== 'review', reviewReason: errors.length ? errors.join('; ') : (lead.matchStatus === 'ambiguous' ? 'ambiguous Zoho match' : lead.reviewReason), ownerResolutionStatus: lead.repName ? 'rep_not_verified' : 'rep_missing' } };"
+      },
+      "name": "Validate CRM Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2896,
+        384
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "expression",
+        "output": "={{ $json.crmAction === 'update' ? 0 : ($json.crmAction === 'create' ? 1 : 2) }}"
+      },
+      "name": "Route CRM Action",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 3.4,
+      "position": [
+        3072,
+        384
+      ]
+    },
+    {
+      "parameters": {
+        "resource": "lead",
+        "operation": "update",
+        "leadId": "={{ $json.duplicateLeadId }}",
+        "updateFields": {
+          "Address": {
+            "address_fields": {
+              "City": "={{ $json.crmCity }}"
+            }
+          },
+          "Company": "={{ $json.crmCompany }}",
+          "Description": "={{ 'Lead updated by GTM workflow.\\nLead mode: ' + ($json.zohoLeadMode || '') + '\\nBusiness type: ' + ($json.businessType || '') + '\\nRep: ' + ($json.repName || 'Unassigned') + '\\nOwner status: ' + ($json.ownerResolutionStatus || '') + '\\nSource URL: ' + ($json.sourceUrl || '') }}",
+          "Designation": "={{ $json.crmTitle }}",
+          "Email": "={{ $json.crmEmail }}",
+          "First_Name": "={{ $json.contactFirstName || '' }}",
+          "Last_Name": "={{ $json.crmLastName }}",
+          "Phone": "={{ $json.crmPhone }}",
+          "Website": "={{ $json.crmWebsite }}"
+        }
+      },
+      "name": "Update Existing Zoho Lead",
+      "type": "n8n-nodes-base.zohoCrm",
+      "typeVersion": 1,
+      "position": [
+        3296,
+        96
+      ],
+      "retryOnFail": true,
+      "maxTries": 3,
+      "waitBetweenTries": 5000,
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const lead = $('Validate CRM Payload').item.json;\nconst response = $json || {};\nconst id = response.id || response.details?.id || lead.duplicateLeadId || '';\nreturn { json: { ...lead, zohoLeadId: id, duplicateLeadId: lead.duplicateLeadId || id, crmStatus: lead.crmAction === 'update' ? 'updated' : 'created', crmReady: true, reviewReason: lead.crmAction === 'update' ? 'Zoho lead updated successfully' : 'Zoho lead created successfully', crmCompletedAt: new Date().toISOString() } };"
+      },
+      "name": "Prepare CRM Success",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3872,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const lead = $('Validate CRM Payload').item.json;\nconst error = $json || {};\nconst message = String(error.message || error.description || 'Zoho CRM request failed').replace(/\\s+/g, ' ').slice(0, 200);\nreturn { json: { ...lead, crmReady: false, crmStatus: 'failed', reviewReason: `Zoho ${lead.crmAction} failed: ${message}`, crmFailedAt: new Date().toISOString() } };"
+      },
+      "name": "Prepare CRM Failure",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3600,
+        272
+      ]
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "const row = { ...$json };\nconst rowNumber = row.row_number || 'unknown';\nreturn { json: { recordType: 'run_issue', uniqueKey: `invalid-input-${rowNumber}-${Date.now()}`, companyName: '', website: '', email: '', phone: '', location: row.location || '', businessType: row.businessType || '', keywords: row.keywords || '', repName: row.repName || '', dataQualityScore: 0, confidenceBand: 'low', duplicateFound: false, duplicateLeadId: '', crmReady: false, reviewReason: 'Invalid enquiry: location and business type are required', normalizedAt: new Date().toISOString() } };"
+      },
+      "name": "Prepare Input Error",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1088,
+        624
+      ]
+    },
+    {
+      "parameters": {
+        "operation": "appendOrUpdate",
+        "documentId": {
+          "__rl": true,
+          "mode": "id",
+          "value": "YOUR_GOOGLE_SHEET_ID",
+          "cachedResultName": "GTM Lead Workbook"
+        },
+        "sheetName": {
+          "__rl": true,
+          "mode": "name",
+          "value": "Review"
+        },
+        "columns": {
+          "mappingMode": "defineBelow",
+          "matchingColumns": [
+            "uniqueKey"
+          ],
+          "value": {
+            "uniqueKey": "={{ $json.uniqueKey }}",
+            "companyName": "={{ $json.companyName }}",
+            "website": "={{ $json.website }}",
+            "email": "={{ $json.email }}",
+            "phone": "={{ $json.phone }}",
+            "location": "={{ $json.location }}",
+            "businessType": "={{ $json.businessType }}",
+            "keywords": "={{ $json.keywords }}",
+            "dataQualityScore": "={{ $json.dataQualityScore }}",
+            "confidenceBand": "={{ $json.confidenceBand }}",
+            "reviewReason": "={{ $json.reviewReason }}",
+            "sourceUrl": "={{ $json.sourceUrl }}",
+            "normalizedAt": "={{ $now.toISO() }}",
+            "repName": "={{ $json.repName }}",
+            "duplicateFound": "={{ $json.duplicateFound }}",
+            "duplicateLeadId": "={{ $json.duplicateLeadId }}",
+            "crmAssignmentNote": "={{ $json.crmAssignmentNote }}",
+            "orgSizeSegment": "={{ $json.orgSizeSegment }}",
+            "orgStructureScore": "={{ $json.orgStructureScore }}",
+            "enrichmentRoleTarget": "={{ $json.enrichmentRoleTarget }}",
+            "enrichmentStatus": "={{ $json.enrichmentStatus }}",
+            "contactFullName": "={{ $json.contactFullName }}",
+            "contactFirstName": "={{ $json.contactFirstName }}",
+            "contactLastName": "={{ $json.contactLastName }}",
+            "contactTitle": "={{ $json.contactTitle }}",
+            "contactEmail": "={{ $json.contactEmail }}",
+            "contactPhone": "={{ $json.contactPhone }}",
+            "contactSource": "={{ $json.contactSource }}",
+            "parentCompanyName": "={{ $json.parentCompanyName }}",
+            "zohoLeadMode": "={{ $json.zohoLeadMode }}",
+            "crmReady": "={{ $json.crmReady }}"
+          },
+          "schema": [
+            {
+              "displayName": "uniqueKey",
+              "required": true,
+              "defaultMatch": true,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "displayName": "companyName",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "website",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "displayName": "email",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "displayName": "phone",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": true
+            },
+            {
+              "displayName": "location",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "businessType",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "keywords",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "repName",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "orgSizeSegment",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "orgStructureScore",
+              "required": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "enrichmentRoleTarget",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "enrichmentStatus",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "contactFullName",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "contactFirstName",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "contactLastName",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "contactTitle",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "contactEmail",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "contactPhone",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "contactSource",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "parentCompanyName",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "zohoLeadMode",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "dataQualityScore",
+              "required": false,
+              "display": true,
+              "type": "number",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "confidenceBand",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "duplicateFound",
+              "required": false,
+              "display": true,
+              "type": "boolean",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "duplicateLeadId",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "reviewReason",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "crmAssignmentNote",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "sourceUrl",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "crmReady",
+              "required": false,
+              "display": true,
+              "type": "boolean",
+              "canBeUsedToMatch": false
+            },
+            {
+              "displayName": "normalizedAt",
+              "required": false,
+              "display": true,
+              "type": "string",
+              "canBeUsedToMatch": false
+            }
+          ]
+        },
+        "options": {
+          "cellFormat": "USER_ENTERED",
+          "locationDefine": {
+            "values": {}
+          }
+        }
+      },
+      "name": "Write Run Issue",
+      "type": "n8n-nodes-base.googleSheets",
+      "typeVersion": 4.7,
+      "position": [
+        1520,
+        624
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": false,
+            "leftValue": "",
+            "typeValidation": "strict",
+            "version": 2
+          },
+          "conditions": [
+            {
+              "leftValue": "={{ $json.location }}",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              },
+              "rightValue": ""
+            },
+            {
+              "leftValue": "={{ $json.businessType }}",
+              "operator": {
+                "type": "string",
+                "operation": "notEmpty"
+              },
+              "rightValue": ""
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "name": "Validate Required Query Fields",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.3,
+      "position": [
+        864,
+        368
+      ]
+    }
+  ],
+  "connections": {
+    "Click to Source Enquiry Leads": {
+      "main": [
+        [
+          {
+            "node": "Read Enquiry Row",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Read Enquiry Row": {
+      "main": [
+        [
+          {
+            "node": "Normalize Enquiry",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search Business Directory API": {
+      "main": [
+        [
+          {
+            "node": "Extract Normalize Score Leads",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Throttle After Zoho Write": {
+      "main": [
+        [
+          {
+            "node": "Loop Leads",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Loop Leads": {
+      "main": [
+        [
+          {
+            "node": "Run Summary",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Write Enrichment Queue",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Write Review Queue": {
+      "main": [
+        [
+          {
+            "node": "Throttle After Review Write",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Throttle After Review Write": {
+      "main": [
+        [
+          {
+            "node": "Loop Leads",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Find Zoho Duplicate Candidates": {
+      "main": [
+        [
+          {
+            "node": "Cross Verify CRM Duplicate",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Classify Enrichment Target": {
+      "main": [
+        [
+          {
+            "node": "Loop Leads",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Merge Enrichment Fields": {
+      "main": [
+        [
+          {
+            "node": "Find Zoho Duplicate Candidates",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Normalize Score Leads": {
+      "main": [
+        [
+          {
+            "node": "Has Contactable Lead?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Has Contactable Lead?": {
+      "main": [
+        [
+          {
+            "node": "Classify Enrichment Target",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Write Run Issue",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Input Error": {
+      "main": [
+        [
+          {
+            "node": "Write Run Issue",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Write Run Issue": {
+      "main": [
+        [
+          {
+            "node": "Run Summary",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Write Enrichment Queue": {
+      "main": [
+        [
+          {
+            "node": "Wait for Clay Callback",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Wait for Clay Callback": {
+      "main": [
+        [
+          {
+            "node": "Merge Enrichment Fields",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Cross Verify CRM Duplicate": {
+      "main": [
+        [
+          {
+            "node": "Validate CRM Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate CRM Payload": {
+      "main": [
+        [
+          {
+            "node": "Route CRM Action",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Route CRM Action": {
+      "main": [
+        [
+          {
+            "node": "Update Existing Zoho Lead",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Create Zoho Lead",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Write Review Queue",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Existing Zoho Lead": {
+      "main": [
+        [
+          {
+            "node": "Prepare CRM Success",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare CRM Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Zoho Lead": {
+      "main": [
+        [
+          {
+            "node": "Prepare CRM Success",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare CRM Failure",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare CRM Success": {
+      "main": [
+        [
+          {
+            "node": "Write Qualified Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Write Qualified Output": {
+      "main": [
+        [
+          {
+            "node": "Throttle After Zoho Write",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare CRM Failure": {
+      "main": [
+        [
+          {
+            "node": "Write Review Queue",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Enquiry": {
+      "main": [
+        [
+          {
+            "node": "Validate Required Query Fields",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Required Query Fields": {
+      "main": [
+        [
+          {
+            "node": "Search Business Directory API",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Prepare Input Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "active": false,
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}

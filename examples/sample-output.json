@@ -1,0 +1,22 @@
+{
+  "uniqueKey": "example-industrial.test",
+  "companyName": "Example Industrial Services",
+  "website": "https://example-industrial.test",
+  "email": "sales@example-industrial.test",
+  "phone": "+15550102020",
+  "location": "Austin, Texas",
+  "businessType": "industrial equipment distributor",
+  "dataQualityScore": 95,
+  "confidenceBand": "high",
+  "orgSizeSegment": "small",
+  "enrichmentRoleTarget": "owner founder managing director",
+  "enrichmentStatus": "contact_found",
+  "contactFullName": "Jordan Example",
+  "contactTitle": "Owner",
+  "contactEmail": "jordan@example-industrial.test",
+  "duplicateFound": false,
+  "crmStatus": "created",
+  "crmReady": true,
+  "reviewReason": "Zoho lead created successfully"
+}
+
